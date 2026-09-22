@@ -1,8 +1,6 @@
 from pathlib import Path
-from ollama import chat
 import json
-
-
+from ollama import chat
 
 question = """
 I changed my university password this morning.
@@ -10,68 +8,131 @@ Now my Windows laptop won't connect to campus Wi-Fi,
 but my phone still works.
 """
 
-## WRITE ##
-service_status = {
-    "wifi": "operational"
-}
 
-state = {
-    "problem": question,
-    "wi_fi status": "operational",
-    "wi-fi_check": True
-}
+def select_context(question: str) -> list[str]:
+    keywords = {
+        "wifi": ["wi-fi", "wifi", "eduroam", "wireless"],
+        "password": ["password", "credential", "login", "authenticate"],
+        "service": ["status", "outage", "operational"],
+        "vpn": ["vpn"],
+        "print": ["print", "printer"],
+        "email": ["email", "mail"],
+        "projector": ["projector", "display", "hdmi"],
+    }
 
-with open("state.json", "w") as file:
-    json.dump(
-        state,
-        file,
-        indent=2
-    )
+    question_lower = question.lower()
+    selected = set()
 
-with open("state.json", "r") as file:
-    state = json.load(file)
+    if any(k in question_lower for k in keywords["wifi"]):
+        selected.add("knowledge/wifi_setup.txt")
+    if any(k in question_lower for k in keywords["password"]):
+        selected.add("knowledge/password_changes.txt")
+    if any(k in question_lower for k in keywords["service"]):
+        selected.add("knowledge/service_status.txt")
+    if any(k in question_lower for k in keywords["vpn"]):
+        selected.add("knowledge/vpn.txt")
+    if any(k in question_lower for k in keywords["print"]):
+        selected.add("knowledge/printing.txt")
+    if any(k in question_lower for k in keywords["email"]):
+        selected.add("knowledge/email_setup.txt")
+    if any(k in question_lower for k in keywords["projector"]):
+        selected.add("knowledge/classroom_projectors.txt")
 
-print(state)
-
-
-## SELECT CONTEXT FILES BASED ON QUESTION
-## Create the function that takes the student's question, takes some keywords and chooses the relevant files from the knowledge base. Return a list of the selected files.
-## For example, if the question has the kyeword "print" or "printer", then the function should return the file "knowledge/printer_setup.txt" in a list.
-def select_context(question):
-    pass
+    return sorted(selected)
 
 
 selected_files = select_context(question)
+print("Selected files:", selected_files)
 
-## READ SELECTED FILES and add their contents to the context variable.
 context = ""
+for file in selected_files:
+    context += Path(file).read_text()
+    context += "\n\n"
+
+print("Raw context characters:", len(context))
 
 
-## 
-## COMPRESS CONTEXT
-## Add logic to compress the context from above by calling Qwen with "context" and the "question" as the parameter
-## The response from Qwen should be the compressed context. Store it in a variable called "compressed_context" 
+def compress_context(context: str, question: str) -> str:
+    response = chat(
+        model="qwen2.5:7b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a context compression assistant. "
+                    "Extract only the information relevant to the user's question. "
+                    "Return a concise, structured summary. Do not add new facts."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Question:\n{question}\n\nFull context:\n{context}"
+            }
+        ]
+    )
+    return response.message.content
 
-def compress_context(context, question):
-    pass
 
+compressed_context = compress_context(context, question)
+print("Compressed context characters:", len(compressed_context))
 
-
-## Print the length of the compressed context
-print(len(compressed_context))
-
-## Now, call Qwen again with the compressed context and the student's question. Store the response in a variable called "response" and print the response from Qwen.
-## Ensure the model produces a structured output 
-
-
-
+response = chat(
+    model="qwen2.5:7b",
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a university IT support assistant. "
+                "Answer using only the compressed context. "
+                "Return a structured answer with fields: "
+                "problem, likely_cause, recommended_steps, service_status."
+            )
+        },
+        {
+            "role": "user",
+            "content": f"Compressed context:\n{compressed_context}\n\nQuestion:\n{question}"
+        }
+    ]
+)
 
 print(response.message.content)
 
-## WRITE the above output in an artifact called "state"
+state = {
+    "problem": question,
+    "selected_files": selected_files,
+    "compressed_context": compressed_context,
+    "answer": response.message.content,
+    "service_status": {
+        "wifi": "operational"
+    }
+}
 
-## Update the rest of the code so that it uses the "state" artifact as part of the context. 
-## It is important to ensure that the model uses only the relevant parts from the "state" artifact and not the entire artifact.
-## For this, you may have to think of a good structure for the "state" artifact and how to use it in the context.
+with open("state.json", "w") as f:
+    json.dump(state, f, indent=2, ensure_ascii=False)
 
+print("State written to state.json")
 
+with open("state.json", "r") as f:
+    state = json.load(f)
+
+task_context = {
+    "problem": state["problem"],
+    "service_status": state["service_status"],
+    "compressed_context": state["compressed_context"],
+}
+
+response = chat(
+    model="qwen2.5:7b",
+    messages=[
+        {
+            "role": "system",
+            "content": "Use only the provided state fields relevant to the task."
+        },
+        {
+            "role": "user",
+            "content": f"State:\n{json.dumps(task_context, ensure_ascii=False, indent=2)}\n\nQuestion:\n{state['problem']}"
+        }
+    ]
+)
+
+print(response.message.content)
